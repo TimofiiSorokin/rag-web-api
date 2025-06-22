@@ -2,6 +2,7 @@ import logging
 import tempfile
 import os
 import uuid
+import shutil
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
@@ -10,13 +11,27 @@ from llama_index.core import Settings
 from llama_index.core.schema import Document
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.legacy.embeddings import HuggingFaceEmbedding
-from llama_index.legacy.readers import SimpleDirectoryReader
 from llama_index.readers.file import PDFReader, DocxReader, MarkdownReader
 
 from app.services.storage import S3StorageService
 from app.services.vector_store import QdrantService
 
 logger = logging.getLogger(__name__)
+
+
+class TextFileReader:
+    """Simple reader for text files"""
+    
+    def load_data(self, file: Path) -> List[Document]:
+        """Load text file and return as Document"""
+        try:
+            with open(file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            return [Document(text=content)]
+        except Exception as e:
+            logger.error(f"Failed to read text file {file}: {e}")
+            return []
 
 
 class DocumentProcessor:
@@ -45,7 +60,7 @@ class DocumentProcessor:
         self.readers = {
             '.pdf': PDFReader(),
             '.docx': DocxReader(),
-            '.txt': SimpleDirectoryReader,
+            '.txt': TextFileReader(),
             '.md': MarkdownReader()
         }
     
@@ -85,13 +100,14 @@ class DocumentProcessor:
             
             reader = self.readers[file_extension]
             
-            if file_extension in ['.txt', '.md']:
-                # SimpleDirectoryReader expects a directory
-                documents = reader(input_files=[str(file_path)])
-            else:
-                # PDF and DOCX readers expect file path
-                documents = reader.load_data(file=file_path)
+            # All readers now expect file path
+            documents = reader.load_data(file=file_path)
             
+            # Check if documents were loaded successfully
+            if not documents:
+                logger.error(f"No documents loaded from {file_path}")
+                return None
+                
             logger.info(f"Read {len(documents)} documents from {file_path}")
             return documents
             
