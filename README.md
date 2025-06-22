@@ -7,6 +7,8 @@ Modern FastAPI application for working with RAG (Retrieval-Augmented Generation)
 - **FastAPI 0.104.1** with Python 3.12
 - **Document Ingestion** with S3 storage and SQS queuing
 - **Vector Database** integration with Qdrant
+- **OpenAI Integration** with GPT models for RAG responses
+- **Streaming Chat API** with Server-Sent Events (SSE)
 - **Docker** support for production
 - **Nginx** as reverse proxy
 - **Quality architecture** with modular separation
@@ -30,7 +32,9 @@ rag-web-api/
 │   │   ├── __init__.py
 │   │   ├── storage.py            # S3 storage service
 │   │   ├── queue.py              # SQS queue service
-│   │   └── vector_store.py       # Qdrant vector store service
+│   │   ├── vector_store.py       # Qdrant vector store service
+│   │   ├── document_processor.py # Document processing with LlamaIndex
+│   │   └── rag_service.py        # RAG service with OpenAI integration
 │   └── api/                      # API endpoints
 │       ├── __init__.py
 │       └── v1/                   # API version 1
@@ -40,7 +44,8 @@ rag-web-api/
 │               ├── __init__.py
 │               ├── health.py     # Health check endpoints
 │               ├── rag.py        # RAG endpoints
-│               └── ingest.py     # Document ingestion endpoints
+│               ├── ingest.py     # Document ingestion endpoints
+│               └── chat.py       # Chat endpoints with streaming
 ├── docker/                       # Docker configuration
 │   ├── prod/                     # Production configuration
 │   │   ├── Dockerfile            # Docker image
@@ -65,7 +70,7 @@ rag-web-api/
 
 ### Dependency Management
 
-- `requirements/base.txt` — minimal runtime dependencies (FastAPI, pydantic, boto3, llama-index, qdrant-client, etc.)
+- `requirements/base.txt` — minimal runtime dependencies (FastAPI 0.104.1, pydantic, boto3 1.34.0, llama-index 0.12.43, qdrant-client 1.7.0, openai 1.90.0, etc.)
 - `requirements/prod.txt` — production dependencies (includes base, can add prod-only packages)
 - `requirements/dev.txt` — development dependencies (includes prod, adds test/lint/dev tools)
 
@@ -149,6 +154,8 @@ docker-compose up -d
 - `POST /api/v1/rag/query` - Main RAG endpoint
 - `POST /api/v1/ingest/` - Document ingestion endpoint
 - `GET /api/v1/ingest/health` - Health check for ingest service
+- `POST /api/v1/chat/` - Chat endpoint with streaming response
+- `GET /api/v1/chat/health` - Health check for chat service
 
 ## 📄 Document Ingestion
 
@@ -176,6 +183,86 @@ curl -X POST "http://localhost:8000/api/v1/ingest/" \
 
 ```bash
 curl http://localhost:8000/api/v1/ingest/health
+```
+
+## 💬 Chat API
+
+### Chat with Documents
+
+The chat endpoint allows you to ask questions about uploaded documents using RAG (Retrieval-Augmented Generation).
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/chat/" \
+     -H "Content-Type: application/json" \
+     -H "Accept: text/event-stream" \
+     -d '{
+       "query": "What documents do we have? Please provide a brief overview.",
+       "max_results": 5
+     }'
+```
+
+**Features:**
+- **Streaming Response**: Real-time streaming using Server-Sent Events (SSE)
+- **RAG Pipeline**: Retrieves relevant documents from Qdrant
+- **OpenAI Integration**: Generates answers using GPT models
+- **Context-Aware**: Uses document content for accurate responses
+
+**Request Body:**
+```json
+{
+  "query": "Your question about the documents",
+  "max_results": 5
+}
+```
+
+**Response:**
+- `200 OK` - Streaming response with SSE
+- `400 Bad Request` - Invalid query
+- `500 Internal Server Error` - Processing error
+
+**SSE Events:**
+- `message` - Content chunks
+- `end` - Stream completion
+- `error` - Error message
+
+### Health Check
+
+```bash
+curl http://localhost:8000/api/v1/chat/health
+```
+
+### JavaScript Example
+
+```javascript
+const response = await fetch('/api/v1/chat/', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Accept': 'text/event-stream'
+  },
+  body: JSON.stringify({
+    query: 'What is this document about?',
+    max_results: 3
+  })
+});
+
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  
+  const chunk = decoder.decode(value);
+  const lines = chunk.split('\n');
+  
+  for (const line of lines) {
+    if (line.startsWith('data: ')) {
+      const data = JSON.parse(line.slice(6));
+      console.log(data.content);
+    }
+  }
+}
 ```
 
 ## 🧪 Testing
@@ -236,6 +323,10 @@ Main variables:
 - `SQS_ENDPOINT_URL` - SQS endpoint URL (http://localhost:4566 for LocalStack)
 - `QDRANT_HOST` - Qdrant host (localhost)
 - `QDRANT_PORT` - Qdrant port (6333)
+- `OPENAI_API_KEY` - OpenAI API key for chat functionality
+- `OPENAI_MODEL` - OpenAI model (default: gpt-3.5-turbo)
+- `OPENAI_MAX_TOKENS` - Maximum tokens for responses (default: 1000)
+- `OPENAI_TEMPERATURE` - Response creativity (default: 0.7)
 
 ### LocalStack Configuration
 

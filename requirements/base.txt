@@ -11,4 +11,5 @@ qdrant-client==1.7.0
 sentence-transformers==2.5.1
 transformers==4.45.0
 torch==2.3.0
-scikit-learn==1.5.2 
+scikit-learn==1.5.2
+openai==1.90.0 
