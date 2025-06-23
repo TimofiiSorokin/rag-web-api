@@ -219,11 +219,11 @@ curl http://localhost:8000/api/v1/chat/health
 
 ### Document Upload
 
-#### POST /api/v1/ingest/
+#### POST /api/v1/rag/ingest
 Upload a document for processing:
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/ingest/" \
+curl -X POST "http://localhost:8000/api/v1/rag/ingest" \
      -H "Content-Type: multipart/form-data" \
      -F "file=@/path/to/your/document.pdf"
 ```
@@ -242,11 +242,11 @@ curl -X POST "http://localhost:8000/api/v1/ingest/" \
 
 ### Chat with Documents
 
-#### POST /api/v1/chat/
+#### POST /api/v1/rag/chat/
 Query the RAG system to get responses based on uploaded documents:
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/chat/" \
+curl -X POST "http://localhost:8000/api/v1/rag/chat/" \
      -H "Content-Type: application/json" \
      -d '{
        "query": "What is contained in the documents? Please provide a brief overview.",
@@ -282,27 +282,6 @@ curl -X POST "http://localhost:8000/api/v1/chat/" \
 ```bash
 # All tests
 python -m pytest tests/ -v
-
-# Ingest tests
-python -m pytest tests/test_ingest.py -v
-
-# Chat tests
-python -m pytest tests/test_chat.py -v
-
-# With coverage
-python -m pytest tests/ --cov=app --cov-report=html
-```
-
-### Test Structure
-- `tests/test_ingest.py` — tests for document upload endpoints
-- `tests/test_chat.py` — tests for chat endpoints
-
-## 🐳 Docker
-
-### Production Configuration
-```bash
-cd docker/prod
-docker-compose up -d
 ```
 
 ### LocalStack for Local Development
@@ -323,128 +302,6 @@ docker-compose logs -f app
 docker-compose logs -f nginx
 ```
 
-## 🔧 Configuration
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `OPENAI_API_KEY` | OpenAI API key | - |
-| `AWS_ACCESS_KEY_ID` | AWS Access Key | test |
-| `AWS_SECRET_ACCESS_KEY` | AWS Secret Key | test |
-| `AWS_DEFAULT_REGION` | AWS region | us-east-1 |
-| `AWS_ENDPOINT_URL` | AWS endpoint URL | http://localhost:4566 |
-| `S3_BUCKET_NAME` | S3 bucket name | documents |
-| `SQS_QUEUE_NAME` | SQS queue name | document-processing |
-| `QDRANT_HOST` | Qdrant host | localhost |
-| `QDRANT_PORT` | Qdrant port | 6333 |
-| `LOG_LEVEL` | Logging level | INFO |
-| `MAX_FILE_SIZE` | Maximum file size | 10485760 (10MB) |
-
-### Logging
-The application uses structured logging with different levels:
-- `DEBUG` — detailed information for development
-- `INFO` — general information about operation
-- `WARNING` — warnings
-- `ERROR` — errors
-
-## 📊 Monitoring
-
-### Health Checks
-- `/health` — basic health check
-- `/api/v1/health/` — API v1 health check
-- `/api/v1/health/detailed` — detailed health check with components
-- `/api/v1/ingest/health` — ingest service health check
-- `/api/v1/chat/health` — chat service health check
-
-### Metrics
-The system provides information about:
-- S3 connection status
-- SQS connection status
-- Qdrant connection status
-- OpenAI configuration
-- Request processing time
-
-## 🔒 Security
-
-### File Validation
-- File type verification
-- File size limits (10MB)
-- Filename validation
-
-### Request Validation
-- Pydantic models for JSON validation
-- Query length limits
-- Parameter validation
-
-### Error Handling
-- Structured HTTP errors
-- Comprehensive error logging
-- Secure error messages
-
-## 🚀 Deployment
-
-### Production
-1. Configure environment variables for production
-2. Use Docker Compose for deployment
-3. Configure Nginx as reverse proxy
-4. Set up SSL certificates
-
-### Scaling
-- Horizontal scaling through Docker Swarm or Kubernetes
-- Load balancer configuration
-- Redis usage for caching
-
-## 🤝 Development
-
-### Code Structure
-- Modular architecture
-- Separation of business logic and API
-- Dependency injection
-- Asynchronous processing
-
-### Adding New Endpoints
-1. Create a new file in `app/api/v1/endpoints/`
-2. Add router in `app/api/v1/router.py`
-3. Write tests in `tests/`
-4. Update documentation
-
-### Code Standards
-- PEP 8 for Python
-- Type hints
-- Docstrings
-- Logging
-
-## 📞 Support
-
-### Useful Commands
-```bash
-# Restart application
-docker-compose restart app
-
-# View logs
-docker-compose logs -f app
-
-# Clean up Docker
-docker-compose down -v
-docker system prune -f
-
-# Check service status
-curl http://localhost:8000/api/v1/health/detailed
-```
-
-### Logging
-```bash
-# Application logs
-tail -f logs/app.log
-
-# Docker logs
-docker-compose logs -f
-```
-
-## 📄 License
-
-This project is distributed under the MIT License.
 
 ## 🤝 Contributing
 
@@ -453,7 +310,3 @@ This project is distributed under the MIT License.
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
-
----
-
-**FastAPI RAG Web API** — a powerful tool for working with documents and generating context-based responses. The system is ready for use both for local development and production deployment.
