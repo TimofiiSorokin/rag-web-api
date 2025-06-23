@@ -1,128 +1,141 @@
 import json
 import logging
 import time
-import os
-from typing import Dict, Any, Optional
+import uuid
+from typing import Any, Dict
 
-from app.core.config import settings
+from app.services.document_processor import DocumentProcessor
 from app.services.queue import SQSService
 from app.services.storage import S3StorageService
 from app.services.vector_store import QdrantService
-from app.services.document_processor import DocumentProcessor
 
 logger = logging.getLogger(__name__)
 
 
 class DocumentWorker:
     """Worker for processing documents from SQS queue"""
-    
+
     def __init__(self):
-        """Initialize worker with services"""
-        # Initialize services with settings from config
-        self.sqs_service = SQSService(
-            endpoint_url=settings.SQS_ENDPOINT_URL if settings.SQS_ENDPOINT_URL else None
-        )
-        self.s3_service = S3StorageService(
-            endpoint_url=settings.S3_ENDPOINT_URL if settings.S3_ENDPOINT_URL else None
-        )
-        self.qdrant_service = QdrantService(
-            host=settings.QDRANT_HOST,
-            port=settings.QDRANT_PORT
-        )
-        
-        # Initialize document processor
-        self.document_processor = DocumentProcessor(
-            s3_service=self.s3_service,
-            qdrant_service=self.qdrant_service
-        )
-        
-        logger.info("Document worker initialized")
-    
+        """Initialize document worker"""
+        self.s3_service = S3StorageService()
+        self.sqs_service = SQSService()
+        self.document_processor = DocumentProcessor()
+        self.qdrant_service = QdrantService()
+
+        logger.info("DocumentWorker initialized")
+
     def process_message(self, message: Dict[str, Any]) -> bool:
         """Process a single message from SQS"""
         try:
             # Parse message body
-            message_body = json.loads(message['Body'])
-            
-            document_id = message_body.get('document_id')
-            filename = message_body.get('filename')
-            s3_key = message_body.get('s3_key')
-            
-            logger.info(f"Processing document: {document_id} - {filename}")
-            
-            # Process document
-            success = self.document_processor.process_document(s3_key, filename)
-            
-            if success:
-                logger.info(f"Successfully processed document: {document_id}")
-                return True
-            else:
-                logger.error(f"Failed to process document: {document_id}")
+            message_body = json.loads(message["Body"])
+            s3_key = message_body.get("s3_key")
+            filename = message_body.get("filename")
+
+            if not s3_key or not filename:
+                logger.error("Invalid message format")
                 return False
-                
+
+            logger.info(f"Processing document: {filename} ({s3_key})")
+
+            # Download file from S3
+            file_data = self.s3_service.download_file(s3_key)
+            if not file_data:
+                logger.error(f"Failed to download file: {s3_key}")
+                return False
+
+            # Save file temporarily
+            temp_file_path = f"/tmp/{filename}"
+            with open(temp_file_path, "wb") as f:
+                f.write(file_data)
+
+            try:
+                # Process document
+                result = self.document_processor.process_file(temp_file_path)
+                if "error" in result:
+                    logger.error(f"Document processing failed: {result['error']}")
+                    return False
+
+                # Store in vector database
+                documents_for_qdrant = []
+                for i, (text, embedding) in enumerate(
+                    zip(result["texts"], result["embeddings"])
+                ):
+                    doc = {
+                        "id": str(uuid.uuid4()),
+                        "content": text,
+                        "vector": embedding,
+                        "filename": filename,
+                        "s3_key": s3_key,
+                        "chunk_id": i,
+                        "chunk_size": len(text),
+                    }
+                    documents_for_qdrant.append(doc)
+
+                success = self.qdrant_service.add_documents(documents_for_qdrant)
+                if not success:
+                    logger.error("Failed to store documents in vector database")
+                    return False
+
+                logger.info(
+                    f"Successfully processed document: {filename} "
+                    f"({len(documents_for_qdrant)} chunks)"
+                )
+                return True
+
+            finally:
+                # Clean up temporary file
+                import os
+
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+
         except Exception as e:
             logger.error(f"Error processing message: {e}")
             return False
-    
-    def run(self, max_messages: int = 10, poll_interval: int = 5):
-        """Run worker loop"""
+
+    def run(self):
+        """Main worker loop"""
         logger.info("Starting document worker...")
-        
+
         while True:
             try:
                 # Receive messages from SQS
-                messages = self.sqs_service.receive_messages(max_messages)
-                
+                messages = self.sqs_service.receive_messages(max_messages=10)
+
                 if not messages:
                     logger.debug("No messages received, waiting...")
-                    time.sleep(poll_interval)
+                    time.sleep(5)
                     continue
-                
+
                 # Process each message
                 for message in messages:
-                    try:
-                        success = self.process_message(message)
-                        
-                        if success:
-                            # Delete message from queue on success
-                            self.sqs_service.delete_message(message['ReceiptHandle'])
-                            logger.info("Message deleted from queue")
-                        else:
-                            # Keep message in queue for retry
-                            logger.warning("Message processing failed, keeping in queue")
-                            
-                    except Exception as e:
-                        logger.error(f"Error processing message: {e}")
-                        # Keep message in queue for retry
-                
+                    success = self.process_message(message)
+
+                    if success:
+                        # Delete message from queue
+                        self.sqs_service.delete_message(message["ReceiptHandle"])
+                        logger.info("Message processed and deleted from queue")
+                    else:
+                        logger.error("Message processing failed, keeping in queue")
+
             except Exception as e:
                 logger.error(f"Error in worker loop: {e}")
-                time.sleep(poll_interval)
-    
-    def process_single_message(self) -> bool:
-        """Process a single message (for testing)"""
-        messages = self.sqs_service.receive_messages(max_messages=1)
-        
-        if not messages:
-            logger.info("No messages in queue")
-            return False
-        
-        message = messages[0]
-        success = self.process_message(message)
-        
-        if success:
-            self.sqs_service.delete_message(message['ReceiptHandle'])
-        
-        return success
+                time.sleep(10)  # Wait before retrying
+
+    def stop(self):
+        """Stop the worker"""
+        logger.info("Stopping document worker...")
+        # Add any cleanup logic here
 
 
 if __name__ == "__main__":
     # Set up logging
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
-    
+
     # Create and run worker
     worker = DocumentWorker()
-    worker.run() 
+    worker.run()

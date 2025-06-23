@@ -1,15 +1,16 @@
+import logging
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-import logging
-from app.core.config import settings
+
 from app.api.v1.router import api_router
-from typing import AsyncIterator
+from app.core.config import settings
 
 # Logging configuration
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ def create_application() -> FastAPI:
         openapi_url=f"{settings.API_V1_STR}/openapi.json",
         docs_url="/docs",
         redoc_url="/redoc",
-        lifespan=lifespan
+        lifespan=lifespan,
     )
     # CORS configuration
     app.add_middleware(
@@ -61,7 +62,7 @@ async def root() -> dict:
         "message": "FastAPI RAG Web API is running!",
         "version": settings.VERSION,
         "docs": "/docs",
-        "health": "/health"
+        "health": "/health",
     }
 
 
@@ -73,10 +74,7 @@ async def health_check() -> dict:
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(
-        "app.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
+        "app.main:app", host="0.0.0.0", port=8000, reload=True, log_level="info"
     )

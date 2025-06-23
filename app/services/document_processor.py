@@ -1,196 +1,145 @@
 import logging
-import tempfile
-import os
-import uuid
-import shutil
-from typing import List, Dict, Any, Optional
 from pathlib import Path
+from typing import List
 
-from llama_index.core.indices.vector_store import VectorStoreIndex
-from llama_index.core import Settings
-from llama_index.core.schema import Document
-from llama_index.core.node_parser import SentenceSplitter
-from llama_index.legacy.embeddings import HuggingFaceEmbedding
-from llama_index.readers.file import PDFReader, DocxReader, MarkdownReader
-
-from app.services.storage import S3StorageService
-from app.services.vector_store import QdrantService
+from llama_index.legacy.schema import Document
+from llama_index.legacy.node_parser import SimpleNodeParser
+from llama_index.legacy.schema import BaseNode
+from llama_index.legacy.embeddings.huggingface import HuggingFaceEmbedding
+from llama_index.legacy.readers.file.base import SimpleDirectoryReader
 
 logger = logging.getLogger(__name__)
 
 
-class TextFileReader:
-    """Simple reader for text files"""
-    
-    def load_data(self, file: Path) -> List[Document]:
-        """Load text file and return as Document"""
-        try:
-            with open(file, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            return [Document(text=content)]
-        except Exception as e:
-            logger.error(f"Failed to read text file {file}: {e}")
-            return []
-
-
 class DocumentProcessor:
     """Service for processing documents with LlamaIndex"""
-    
-    def __init__(self, s3_service: S3StorageService, qdrant_service: QdrantService):
+
+    def __init__(self):
         """Initialize document processor"""
-        self.s3_service = s3_service
-        self.qdrant_service = qdrant_service
-        
-        # Initialize embedding model
-        self.embedding_model = HuggingFaceEmbedding(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
-        
-        # Set embedding model for LlamaIndex
-        Settings.embed_model = self.embedding_model
-        
-        # Initialize node parser
-        self.node_parser = SentenceSplitter(
-            chunk_size=512,
-            chunk_overlap=50
-        )
-        
-        # File readers
-        self.readers = {
-            '.pdf': PDFReader(),
-            '.docx': DocxReader(),
-            '.txt': TextFileReader(),
-            '.md': MarkdownReader()
-        }
-    
-    def download_file_from_s3(self, s3_key: str) -> Optional[Path]:
-        """Download file from S3 to temporary location"""
+        self.embedding_model = None
+        self.node_parser = SimpleNodeParser.from_defaults()
+        self.setup_embedding_model()
+        logger.info("DocumentProcessor initialized")
+
+    def setup_embedding_model(
+        self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    ):
+        """Setup embedding model"""
         try:
-            # Get file from S3
-            response = self.s3_service.s3_client.get_object(
-                Bucket=self.s3_service.bucket_name,
-                Key=s3_key
-            )
-            
-            # Create temporary file
-            file_extension = Path(s3_key).suffix
-            with tempfile.NamedTemporaryFile(
-                suffix=file_extension, 
-                delete=False
-            ) as temp_file:
-                temp_file.write(response['Body'].read())
-                temp_path = Path(temp_file.name)
-            
-            logger.info(f"Downloaded file from S3: {s3_key} -> {temp_path}")
-            return temp_path
-            
+            self.embedding_model = HuggingFaceEmbedding(model_name=model_name)
+            logger.info(f"Embedding model setup: {model_name}")
         except Exception as e:
-            logger.error(f"Failed to download file from S3: {e}")
-            return None
-    
-    def read_document(self, file_path: Path) -> Optional[List[Document]]:
-        """Read document using appropriate reader"""
+            logger.error(f"Failed to setup embedding model: {e}")
+            raise
+
+    def load_documents(self, file_path: str) -> List[Document]:
+        """Load documents from file path"""
         try:
-            file_extension = file_path.suffix.lower()
-            
-            if file_extension not in self.readers:
-                logger.error(f"Unsupported file type: {file_extension}")
-                return None
-            
-            reader = self.readers[file_extension]
-            
-            # All readers now expect file path
-            documents = reader.load_data(file=file_path)
-            
-            # Check if documents were loaded successfully
-            if not documents:
-                logger.error(f"No documents loaded from {file_path}")
-                return None
-                
-            logger.info(f"Read {len(documents)} documents from {file_path}")
+            path = Path(file_path)
+            if not path.exists():
+                logger.error(f"File not found: {file_path}")
+                return []
+
+            # Load documents using SimpleDirectoryReader
+            reader = SimpleDirectoryReader(input_files=[str(path)])
+            documents = reader.load_data()
+
+            logger.info(f"Loaded {len(documents)} documents from {file_path}")
             return documents
-            
+
         except Exception as e:
-            logger.error(f"Failed to read document {file_path}: {e}")
-            return None
-    
-    def process_document(self, s3_key: str, filename: str) -> bool:
-        """Process document: download, parse, and store in vector database"""
+            logger.error(f"Error loading documents from {file_path}: {e}")
+            return []
+
+    def process_documents(self, documents: List[Document]) -> List[BaseNode]:
+        """Process documents into nodes"""
         try:
-            # Download file from S3
-            temp_file_path = self.download_file_from_s3(s3_key)
-            if not temp_file_path:
-                return False
-            
-            try:
-                # Read document
-                documents = self.read_document(temp_file_path)
-                if not documents:
-                    return False
-                
-                # Create vector store index
-                index = VectorStoreIndex.from_documents(
-                    documents,
-                    transformations=[self.node_parser]
-                )
-                
-                # Get nodes with embeddings
-                nodes = index.docstore.docs.values()
-                
-                # Prepare documents for Qdrant
-                qdrant_documents = []
-                for i, node in enumerate(nodes):
-                    # Create embedding for the node text
-                    try:
-                        embedding = self.embedding_model.get_text_embedding(node.text)
-                        logger.debug(f"Created embedding for chunk {i}: {len(embedding)} dimensions")
-                    except Exception as e:
-                        logger.error(f"Failed to create embedding for chunk {i}: {e}")
-                        continue
-                    
-                    # Generate unique UUID for Qdrant point ID
-                    point_id = str(uuid.uuid4())
-                    
-                    qdrant_doc = {
-                        'id': point_id,
-                        'content': node.text,
-                        'vector': embedding,
-                        'metadata': {
-                            'filename': filename,
-                            's3_key': s3_key,
-                            'chunk_id': i,
-                            'chunk_size': len(node.text),
-                            'original_id': f"{s3_key}_{i}"  # Keep original ID in metadata
-                        },
-                        'source': s3_key,
-                        'filename': filename
-                    }
-                    qdrant_documents.append(qdrant_doc)
-                
-                if not qdrant_documents:
-                    logger.error("No documents with valid embeddings to store")
-                    return False
-                
-                # Store in Qdrant
-                success = self.qdrant_service.add_documents(qdrant_documents)
-                
-                if success:
-                    logger.info(
-                        f"Successfully processed document: {filename} "
-                        f"({len(qdrant_documents)} chunks)"
-                    )
-                else:
-                    logger.error(f"Failed to store document in Qdrant: {filename}")
-                
-                return success
-                
-            finally:
-                # Clean up temporary file
-                if temp_file_path.exists():
-                    temp_file_path.unlink()
-                    logger.info(f"Cleaned up temporary file: {temp_file_path}")
-            
+            if not documents:
+                logger.warning("No documents to process")
+                return []
+
+            # Parse documents into nodes
+            nodes = self.node_parser.get_nodes_from_documents(documents)
+
+            logger.info(f"Processed {len(documents)} documents into {len(nodes)} nodes")
+            return nodes
+
         except Exception as e:
-            logger.error(f"Failed to process document {filename}: {e}")
-            return False 
+            logger.error(f"Error processing documents: {e}")
+            return []
+
+    def extract_text_from_nodes(self, nodes: List[BaseNode]) -> List[str]:
+        """Extract text content from nodes"""
+        try:
+            texts = []
+            for node in nodes:
+                if hasattr(node, "text") and node.text:
+                    texts.append(node.text)
+                elif hasattr(node, "content") and node.content:
+                    texts.append(node.content)
+                else:
+                    logger.warning(f"Node has no text content: {node}")
+
+            logger.info(f"Extracted text from {len(texts)} nodes")
+            return texts
+
+        except Exception as e:
+            logger.error(f"Error extracting text from nodes: {e}")
+            return []
+
+    def create_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """Create embeddings for text content"""
+        try:
+            if not self.embedding_model:
+                logger.error("Embedding model not initialized")
+                return []
+
+            embeddings = []
+            for text in texts:
+                if text.strip():
+                    embedding = self.embedding_model.get_text_embedding(text)
+                    embeddings.append(embedding)
+                else:
+                    logger.warning("Skipping empty text for embedding")
+
+            logger.info(f"Created embeddings for {len(embeddings)} texts")
+            return embeddings
+
+        except Exception as e:
+            logger.error(f"Error creating embeddings: {e}")
+            return []
+
+    def process_file(self, file_path: str) -> dict:
+        """Complete document processing pipeline"""
+        try:
+            # Load documents
+            documents = self.load_documents(file_path)
+            if not documents:
+                return {"error": "No documents loaded"}
+
+            # Process documents into nodes
+            nodes = self.process_documents(documents)
+            if not nodes:
+                return {"error": "No nodes created"}
+
+            # Extract text content
+            texts = self.extract_text_from_nodes(nodes)
+            if not texts:
+                return {"error": "No text content extracted"}
+
+            # Create embeddings
+            embeddings = self.create_embeddings(texts)
+            if not embeddings:
+                return {"error": "No embeddings created"}
+
+            return {
+                "documents": documents,
+                "nodes": nodes,
+                "texts": texts,
+                "embeddings": embeddings,
+                "file_path": file_path,
+            }
+
+        except Exception as e:
+            logger.error(f"Error in document processing pipeline: {e}")
+            return {"error": str(e)}

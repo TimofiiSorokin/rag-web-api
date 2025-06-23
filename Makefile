@@ -22,11 +22,17 @@ stop-docker: ## Stop Docker containers
 logs: ## Show Docker logs
 	cd docker/prod && docker-compose logs -f
 
-test: ## Run tests
-	pytest
+test: ## Run all tests
+	python -m pytest tests/ -v
+
+test-ingest: ## Run ingest endpoint tests
+	python -m pytest tests/test_ingest.py -v
+
+test-chat: ## Run chat endpoint tests
+	python -m pytest tests/test_chat.py -v
 
 test-cov: ## Run tests with coverage
-	pytest --cov=app --cov-report=html
+	python -m pytest tests/ --cov=app --cov-report=html --cov-report=term-missing
 
 lint: ## Run linting
 	flake8 app/
@@ -66,3 +72,35 @@ setup: ## Complete project setup
 
 dev: ## Run in development mode
 	uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --log-level debug
+
+setup-localstack: ## Setup LocalStack for local development
+	./scripts/setup_localstack.sh
+
+run-localstack: ## Run LocalStack
+	cd docker/localstack && docker-compose up -d
+
+stop-localstack: ## Stop LocalStack
+	cd docker/localstack && docker-compose down
+
+logs-localstack: ## Show LocalStack logs
+	cd docker/localstack && docker-compose logs -f
+
+health-check: ## Check application health
+	curl http://localhost:8000/health
+
+health-detailed: ## Check detailed health status
+	curl http://localhost:8000/api/v1/health/detailed
+
+cleanup-duplicates: ## Clean up duplicate documents in Qdrant
+	python scripts/cleanup_duplicates.py
+
+cleanup-all: ## Clean up SQS queue and Qdrant database completely
+	curl -X POST "http://localhost:6333/collections/documents/points/delete" \
+	  -H "Content-Type: application/json" \
+	  -d '{"filter":{}}'
+	python scripts/cleanup_all.py
+
+curl-qdrant-points: ## Check Qdrant points
+	curl -s -X POST "http://localhost:6333/collections/documents/points/scroll" \
+	  -H "Content-Type: application/json" \
+	  -d '{"limit": 100}' | jq '.result[] | {filename: .payload.filename, chunk_id: .payload.chunk_id, id: .id}'

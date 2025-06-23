@@ -1,10 +1,10 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import health, rag, ingest, chat
+
+from app.api.v1.endpoints import chat, health, ingest
 
 api_router = APIRouter()
 
-# Include endpoints
-api_router.include_router(health.router, prefix="/health", tags=["health"])
-api_router.include_router(rag.router, prefix="/rag", tags=["rag"])
-api_router.include_router(ingest.router, prefix="/ingest", tags=["ingest"])
-api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
+# Include endpoints with /rag prefix
+api_router.include_router(health.router, prefix="/rag/health", tags=["health"])
+api_router.include_router(ingest.router, prefix="/rag/ingest", tags=["ingest"])
+api_router.include_router(chat.router, prefix="/rag/chat", tags=["chat"])

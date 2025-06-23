@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException
-from typing import Dict, Any
 import logging
+from typing import Any, Dict
+
+from fastapi import APIRouter, HTTPException
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -14,7 +15,7 @@ async def health_check() -> Dict[str, Any]:
             "status": "healthy",
             "service": "FastAPI RAG Web API",
             "version": "1.0.0",
-            "endpoint": "v1/health"
+            "endpoint": "v1/health",
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")
@@ -34,14 +35,10 @@ async def detailed_health_check() -> Dict[str, Any]:
             "checks": {
                 "api": "healthy",
                 "database": "not_configured",  # Will be configured later
-            }
+            },
         }
-        logger.info(
-            "Detailed health check completed successfully"
-        )
+        logger.info("Detailed health check completed successfully")
         return health_status
     except Exception as e:
         logger.error(f"Detailed health check failed: {e}")
-        raise HTTPException(
-            status_code=500, detail="Detailed health check failed"
-        )
+        raise HTTPException(status_code=500, detail="Detailed health check failed")
